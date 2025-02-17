@@ -23,7 +23,7 @@ def load_premise():
         return json.load(f)
 
 ########################################
-# DB接続 (もし db.py が別途あるならそちらを利用)
+# DB接続
 ########################################
 DATABASE_FILE = "cutting_selection.db"
 def get_connection():
@@ -32,45 +32,70 @@ def get_connection():
 
 ########################################
 # DB検索関数
+# 未入力 (= None) の項目は WHERE条件を付与せず全許容
 ########################################
 def query_breakers(cut_depth, feed_rate, process_type):
     """
     breakers テーブル
-      - 加工種別=process_type
-      - 切込み最小 <= cut_depth <= 切込み最大
-      - 送り量最小 <= feed_rate <= 送り量最大
+      - 加工種別 = process_type      (未入力なら絞り込まず)
+      - 切込み最小 <= cut_depth <= 切込み最大 (未入力なら絞り込まず)
+      - 送り量最小 <= feed_rate <= 送り量最大 (未入力なら絞り込まず)
     """
     conn = get_connection()
-    query = """
-    SELECT *
-    FROM breakers
-    WHERE
-        加工種別 = ?
-        AND 切込み最小 <= ?
-        AND 切込み最大 >= ?
-        AND 送り量最小 <= ?
-        AND 送り量最大 >= ?
-    """
-    df = pd.read_sql_query(query, conn, params=[process_type, cut_depth, cut_depth, feed_rate, feed_rate])
+    base_query = "SELECT * FROM breakers"
+    conditions = []
+    params = []
+
+    # 加工種別
+    if process_type is not None:
+        conditions.append("加工種別 = ?")
+        params.append(process_type)
+
+    # 切込み
+    if cut_depth is not None:
+        conditions.append("切込み最小 <= ?")
+        conditions.append("切込み最大 >= ?")
+        params.extend([cut_depth, cut_depth])
+
+    # 送り量
+    if feed_rate is not None:
+        conditions.append("送り量最小 <= ?")
+        conditions.append("送り量最大 >= ?")
+        params.extend([feed_rate, feed_rate])
+
+    if conditions:
+        base_query += " WHERE " + " AND ".join(conditions)
+
+    df = pd.read_sql_query(base_query, conn, params=params)
     conn.close()
     return df
 
 def query_materials(cutting_speed, process_type):
     """
     materials テーブル
-      - 加工種別=process_type
-      - 切削速度最小 <= cutting_speed <= 切削速度最大
+      - 加工種別 = process_type                (未入力なら絞り込まず)
+      - 切削速度最小 <= cutting_speed <= 切削速度最大 (未入力なら絞り込まず)
     """
     conn = get_connection()
-    query = """
-    SELECT *
-    FROM materials
-    WHERE
-        加工種別 = ?
-        AND 切削速度最小 <= ?
-        AND 切削速度最大 >= ?
-    """
-    df = pd.read_sql_query(query, conn, params=[process_type, cutting_speed, cutting_speed])
+    base_query = "SELECT * FROM materials"
+    conditions = []
+    params = []
+
+    # 加工種別
+    if process_type is not None:
+        conditions.append("加工種別 = ?")
+        params.append(process_type)
+
+    # 切削速度
+    if cutting_speed is not None:
+        conditions.append("切削速度最小 <= ?")
+        conditions.append("切削速度最大 >= ?")
+        params.extend([cutting_speed, cutting_speed])
+
+    if conditions:
+        base_query += " WHERE " + " AND ".join(conditions)
+
+    df = pd.read_sql_query(base_query, conn, params=params)
     conn.close()
     return df
 
@@ -78,11 +103,6 @@ def query_materials(cutting_speed, process_type):
 # GPT呼び出し
 ########################################
 def call_gpt_api(messages, premise_data, breaker_df, material_df):
-    """
-    messages: [{"role":"user","content":"..."},{"role":"assistant","content":"..."}...]
-    premise_data: {"title":..., "details":...}
-    breaker_df, material_df: 候補の DataFrame
-    """
     premise_title = premise_data.get("title","(no title)")
     premise_details = premise_data.get("details","(no details)")
 
@@ -93,19 +113,12 @@ def call_gpt_api(messages, premise_data, breaker_df, material_df):
 前提条件:
 タイトル: {premise_title}
 詳細: {premise_details}
-ユーザーのインプットは
-切り込み:0.2
-送り量:0.2
-切削速度:200
-加工種別:仕上げ
-14:30
-加工種別	ブレーカ	切込み最小	切込み推奨	切込み最大	送り最小	送り推奨	送り最大
-仕上げ	FL	0.1	0.5	1.0	0.05	0.15	0.25
-仕上げ	FE	0.2	0.6	1.0	0.10	0.25	0.45
-仕上げ	LU	0.1	1.0	1.8	0.08	0.17	0.40
-加工種別	材種	切削速度最小	切削速度推奨	切削速度最大
-仕上げ	AC8115P	110	250	450
-仕上げ	AC8020P	100	230	400
+
+現在の入力値:
+- 切込み(mm): {st.session_state.cut_depth}
+- 送り量(mm/rev): {st.session_state.feed_rate}
+- 切削速度(m/min): {st.session_state.cut_speed}
+- 加工種別: {st.session_state.process_type}
 
 ブレーカー候補 CSV:
 {breaker_csv}
@@ -116,7 +129,6 @@ def call_gpt_api(messages, premise_data, breaker_df, material_df):
 上記を踏まえ、ユーザーとのチャットを行い最適なブレーカーと素材を提案してください。
 候補を選ぶ際には、前提条件(耐久性重視など)も考慮し、具体的な理由を述べてください。
 """
-    # 先頭に systemメッセージ
     full_messages = [{"role":"system", "content": system_prompt}] + messages
 
     try:
@@ -133,6 +145,8 @@ def call_gpt_api(messages, premise_data, breaker_df, material_df):
 ########################################
 def sanitize_float(value_str):
     norm = unicodedata.normalize('NFKC', value_str).strip()
+    if not norm:
+        return None  # 未入力の場合は None
     try:
         val = float(norm)
         if val < 0:
@@ -161,21 +175,28 @@ if "breaker_df" not in st.session_state:
 if "material_df" not in st.session_state:
     st.session_state.material_df = pd.DataFrame()
 
-# GPTチャット用メッセージ履歴
 if "chat_messages" not in st.session_state:
     st.session_state.chat_messages = []
 
-# チャット終了フラグ
 if "chat_finished" not in st.session_state:
     st.session_state.chat_finished = False
-
 
 ########################################
 # メイン画面
 ########################################
 st.title("ブレイカー、素材検索アプリ")
 
-# 1) 前提条件の可視化
+# --- 追加: 機能説明のトグル ---
+with st.expander("機能説明"):
+    st.write("""
+本アプリは、入力された条件（切込み、送り量、切削速度、加工種別）をもとに
+ブレーカーおよび素材を検索します。  
+4つの項目のうち**少なくとも3つ**を入力すると検索が実行でき、  
+**未入力の項目は全ての値を許容**した上でDB検索を行います。  
+また、検索結果をもとにGPTとチャットし、最適な組み合わせを探せます。
+""")
+
+# 前提条件の可視化
 with st.expander("前提ファイルの内容"):
     pm = st.session_state["premise_data"]
     st.write(f"**タイトル**: {pm.get('title','')}")
@@ -191,7 +212,7 @@ with col2:
 with col3:
     st.session_state.cut_speed = st.text_input("切削速度(m/min)", st.session_state.cut_speed)
 
-# ★★★ 加工種別ボタンを4つに修正: 仕上げ、軽切削、中切削、粗加工 ★★★
+# 加工種別ボタン
 b1, b2, b3, b4 = st.columns(4)
 if b1.button("仕上げ"):
     st.session_state.process_type = "仕上げ"
@@ -204,19 +225,32 @@ if b4.button("粗加工"):
 
 st.write(f"現在の加工種別: {st.session_state.process_type}")
 
+# 検索実行
 if st.button("検索実行"):
     cd = sanitize_float(st.session_state.cut_depth)
     fr = sanitize_float(st.session_state.feed_rate)
     cs = sanitize_float(st.session_state.cut_speed)
-    if cd is None or fr is None or cs is None:
-        st.error("数値入力が正しくありません。正の数で入力してください。")
-        st.stop()
-    if not st.session_state.process_type:
-        st.error("加工種別を選択してください。")
+    pt = st.session_state.process_type.strip() if st.session_state.process_type else None
+
+    # 入力されている項目数をカウント
+    filled_fields = 0
+    if cd is not None:
+        filled_fields += 1
+    if fr is not None:
+        filled_fields += 1
+    if cs is not None:
+        filled_fields += 1
+    if pt:
+        filled_fields += 1
+
+    # 3項目以上必須
+    if filled_fields < 3:
+        st.error("4つの項目のうち、少なくとも3つ以上を入力してください。")
         st.stop()
 
-    bdf = query_breakers(cd, fr, st.session_state.process_type)
-    mdf = query_materials(cs, st.session_state.process_type)
+    # DB検索 (Noneの項目は絞り込まず全許容)
+    bdf = query_breakers(cd, fr, pt)
+    mdf = query_materials(cs, pt)
 
     st.session_state.breaker_df = bdf
     st.session_state.material_df = mdf
@@ -255,9 +289,7 @@ for msg in st.session_state.chat_messages:
 
 user_text = st.chat_input("追加の質問や要望をどうぞ (終了ボタンで終了)")
 if user_text:
-    # ユーザー発言を履歴に追加
     st.session_state.chat_messages.append({"role": "user", "content": user_text})
-    # GPT呼び出し
     premise = st.session_state["premise_data"]
     bdf = st.session_state.breaker_df
     mdf = st.session_state.material_df
