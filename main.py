@@ -108,7 +108,7 @@ def call_gpt_api(messages, premise_data, breaker_df, material_df):
 
     try:
         response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
+            model="gpt-4o-mini",
             messages=full_messages
         )
         return response.choices[0].message.content.strip()
