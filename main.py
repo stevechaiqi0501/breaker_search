@@ -127,7 +127,13 @@ def call_gpt_api(messages, premise_data, breaker_df, material_df):
 {material_csv}
 
 上記を踏まえ、ユーザーとのチャットを行い最適なブレーカーと素材を提案してください。
-候補を選ぶ際には、前提条件(耐久性重視など)も考慮し、具体的な理由を述べてください。
+候補を選ぶ際には、前提条件も考慮し、具体的な理由を述べてください。
+必ず候補の素材、ブレーカを全て列挙してください
+勝手に推奨速度を超えないといけないみたいなルールは作らないでほしい。
+単に範囲（最小<input<最大）であればいい。
+ただ、推奨に近い方がいいだけでなので、推奨を超えてないから不適合みたいな言い方は避けて
+また、前程条件を踏まえていることも必ず出力に踏まえさえて
+
 """
     full_messages = [{"role":"system", "content": system_prompt}] + messages
 
@@ -189,20 +195,23 @@ st.title("ブレイカー、素材検索アプリ")
 # --- 追加: 機能説明のトグル ---
 with st.expander("機能説明"):
     st.write("""
-本アプリは、入力された条件（切込み、送り量、切削速度、加工種別）をもとに
-ブレーカーおよび素材を検索します。  
-4つの項目のうち**少なくとも3つ**を入力すると検索が実行でき、  
+**機能1**
+切込み量 (mm)、送り量 (mm/rev)、切削速度 (m/min)、加工種別 (仕上げ / 軽切削 / 中切削 / 粗加工) を入力・選択できる。 
+(4つの項目のうち**3項目以上**を入力すると検索が実行できる)  
+**機能2 条件検索** 
+入力した加工条件をもとに、ブレーカー（breakersテーブル）と素材（materialsテーブル）の候補を検索。
 **未入力の項目は全ての値を許容**した上でDB検索を行います。  
-また、検索結果をもとにGPTとチャットし、最適な組み合わせを探せます。
+**機能3 GPTによる分析**
+前程条件+入力値検索による検索
+gptと対話して決めることも可能
 """)
-
 # 前提条件の可視化
 with st.expander("前提ファイルの内容"):
     pm = st.session_state["premise_data"]
     st.write(f"**タイトル**: {pm.get('title','')}")
     st.write(f"**詳細**: {pm.get('details','')}")
 
-st.subheader("① 数値入力 & 加工種別選択")
+st.subheader("① 数値入力 & 加工種別選択（3種類以上入力より可能）")
 
 col1, col2, col3 = st.columns(3)
 with col1:
@@ -225,38 +234,89 @@ if b4.button("粗加工"):
 
 st.write(f"現在の加工種別: {st.session_state.process_type}")
 
-# 検索実行
-if st.button("検索実行"):
-    cd = sanitize_float(st.session_state.cut_depth)
-    fr = sanitize_float(st.session_state.feed_rate)
-    cs = sanitize_float(st.session_state.cut_speed)
-    pt = st.session_state.process_type.strip() if st.session_state.process_type else None
+# ★ 変更点ここから: 「検索のみ」ボタンと「検索+GPT分析」ボタンを用意
+col_search1, col_search2 = st.columns(2)
+with col_search1:
+    if st.button("検索のみ"):
+        cd = sanitize_float(st.session_state.cut_depth)
+        fr = sanitize_float(st.session_state.feed_rate)
+        cs = sanitize_float(st.session_state.cut_speed)
+        pt = st.session_state.process_type.strip() if st.session_state.process_type else None
 
-    # 入力されている項目数をカウント
-    filled_fields = 0
-    if cd is not None:
-        filled_fields += 1
-    if fr is not None:
-        filled_fields += 1
-    if cs is not None:
-        filled_fields += 1
-    if pt:
-        filled_fields += 1
+        # 入力されている項目数をカウント (最低3つ必須)
+        filled_fields = 0
+        if cd is not None:
+            filled_fields += 1
+        if fr is not None:
+            filled_fields += 1
+        if cs is not None:
+            filled_fields += 1
+        if pt:
+            filled_fields += 1
 
-    # 3項目以上必須
-    if filled_fields < 3:
-        st.error("4つの項目のうち、少なくとも3つ以上を入力してください。")
-        st.stop()
+        if filled_fields < 3:
+            st.error("4つの項目のうち、少なくとも3つ以上を入力してください。")
+            st.stop()
 
-    # DB検索 (Noneの項目は絞り込まず全許容)
-    bdf = query_breakers(cd, fr, pt)
-    mdf = query_materials(cs, pt)
+        bdf = query_breakers(cd, fr, pt)
+        mdf = query_materials(cs, pt)
 
-    st.session_state.breaker_df = bdf
-    st.session_state.material_df = mdf
+        st.session_state.breaker_df = bdf
+        st.session_state.material_df = mdf
 
-    st.success("検索を実行しました。下に結果を表示します。")
-    st.rerun()
+        st.success("検索を実行しました。下に結果を表示します。")
+        st.rerun()
+
+with col_search2:
+    if st.button("前程条件検索"):
+        cd = sanitize_float(st.session_state.cut_depth)
+        fr = sanitize_float(st.session_state.feed_rate)
+        cs = sanitize_float(st.session_state.cut_speed)
+        pt = st.session_state.process_type.strip() if st.session_state.process_type else None
+
+        # 入力されている項目数をカウント (最低3つ必須)
+        filled_fields = 0
+        if cd is not None:
+            filled_fields += 1
+        if fr is not None:
+            filled_fields += 1
+        if cs is not None:
+            filled_fields += 1
+        if pt:
+            filled_fields += 1
+
+        if filled_fields < 3:
+            st.error("4つの項目のうち、少なくとも3つ以上を入力してください。")
+            st.stop()
+
+        bdf = query_breakers(cd, fr, pt)
+        mdf = query_materials(cs, pt)
+
+        st.session_state.breaker_df = bdf
+        st.session_state.material_df = mdf
+
+        st.success("候補のブレーカー、素材と、前程条件を踏まえた上での検索を行います")
+
+        # ここでGPTに初回分析依頼
+        premise = st.session_state["premise_data"]
+        user_prompt_for_analysis = (
+            "検索結果に基づき、前提条件を踏まえた初回の分析をお願いします。"
+        )
+        st.session_state.chat_messages.append({
+            "role": "user",
+            "content": user_prompt_for_analysis
+        })
+
+        gpt_reply = call_gpt_api(
+            st.session_state.chat_messages,
+            premise,
+            bdf,
+            mdf
+        )
+        st.session_state.chat_messages.append({"role":"assistant", "content":gpt_reply})
+
+        st.rerun()
+# ★ 変更点ここまで
 
 st.subheader("② 検索結果表示")
 
