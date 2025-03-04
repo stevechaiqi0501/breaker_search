@@ -133,13 +133,19 @@ def call_gpt_api(messages, premise_data, breaker_df, material_df):
 
 【指示】
 1. 上記の前提条件・入力値・CSVをすべて踏まえ、ユーザーとのチャットを行い、最適なブレーカーと素材を提案してください。
+    -まず、必ず前提条件に書いてあることを書き出してください
+    -次に「ユーザー入力値」を出力してください
+    -次に 「ユーザー入力値」に基づくブレーカー・素材候補を列挙してください
 2. 候補を選ぶ際は、前提条件を必ず尊重し、CSVにある情報のみを根拠として理由を述べてください。
 3. 候補の素材・ブレーカーは、CSVに該当するものを**すべて列挙**してください。  
    - 万一「推奨範囲を少し超える」または「範囲内に収まっていない」などがあっても、絶対に除外せず「理由を述べたうえで列挙」してください。
 4. 「推奨速度を超えてはいけない」などの独自ルールを勝手に課さないでください。
    - 速度や送り量が範囲内かどうかは参考情報であり、少し外れていても一律に不適合とは言わず、理由やリスクを述べるに留めてください。
 5. 不明点がある場合は推測で埋めず、「不明です」「データがありません」などと書き、ハルシネーションを起こさないようにしてください。
+    -あなたに渡していない情報を勝手に推測・ネットから取得して出力するのは必ず避けてください
 6. 回答の中で必ず「前提条件に照らし合わせた説明」を含めてください。
+7. 最後に必ず組み合わせを提示してください。その時は前提条件の参照を必ずして理由を添えてください,その時は「ブレーカー：素材」で一対一で提示してください
+8. ユーザーの入力値条件に当てはまらないブレーカー、素材を候補・組み合わせに選ぶのは避けてください
 
 これらを徹底的に遵守して回答してください。
 """
@@ -147,7 +153,7 @@ def call_gpt_api(messages, premise_data, breaker_df, material_df):
 
     try:
         response = openai.ChatCompletion.create(
-            model="gpt-4o-mini",
+            model="chatgpt-4o-latest",
             messages=full_messages
         )
         return response.choices[0].message.content.strip()
@@ -266,7 +272,7 @@ def check_input_requirements():
 
 col_search1, col_search2 = st.columns(2)
 with col_search1:
-    if st.button("検索のみ"):
+    if st.button("条件検索"):
         cd, fr, cs = check_input_requirements()  # ここで必須入力チェック
         pt = st.session_state.process_type.strip() if st.session_state.process_type else None
 
@@ -281,7 +287,7 @@ with col_search1:
         st.rerun()
 
 with col_search2:
-    if st.button("GPTに分析してもらう"):
+    if st.button("AI分析"):
         cd, fr, cs = check_input_requirements()  # ここで必須入力チェック
         pt = st.session_state.process_type.strip() if st.session_state.process_type else None
 
